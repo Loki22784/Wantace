@@ -1,0 +1,138 @@
+import { Config } from "../models/Config.js";
+import { Lead } from "../models/Lead.js";
+import { calculateEstimate } from "../services/calculator.js";
+
+function validateAnswers(config, answers) {
+  for (const question of config.questions) {
+    if (!question.active) {
+      continue;
+    }
+
+    const value = answers[question.key];
+
+    if (
+      question.required &&
+      (value === undefined ||
+        value === null ||
+        value === "")
+    ) {
+      return `${question.label} is required`;
+    }
+
+    if (question.type === "number") {
+      const numericValue = Number(value);
+
+      if (!Number.isFinite(numericValue)) {
+        return `${question.label} must be a valid number`;
+      }
+
+      if (
+        question.min !== undefined &&
+        numericValue < question.min
+      ) {
+        return `${question.label} must be at least ${question.min}`;
+      }
+
+      if (
+        question.max !== undefined &&
+        numericValue > question.max
+      ) {
+        return `${question.label} must be at most ${question.max}`;
+      }
+    }
+
+    if (question.type === "select") {
+      const validOption = question.options.some(
+        (option) => option.value === value
+      );
+
+      if (!validOption) {
+        return `Invalid selection for ${question.label}`;
+      }
+    }
+  }
+
+  return null;
+}
+
+export async function createEstimate(req, res) {
+  try {
+    const {
+      name,
+      phone,
+      email,
+      answers
+    } = req.body;
+
+    if (!name || !phone || !email) {
+      return res.status(400).json({
+        success: false,
+        message: "Name, phone and email are required"
+      });
+    }
+
+    if (
+      !answers ||
+      typeof answers !== "object"
+    ) {
+      return res.status(400).json({
+        success: false,
+        message: "Answers are required"
+      });
+    }
+
+    const config = await Config.findOne({
+      active: true
+    });
+
+    if (!config) {
+      return res.status(404).json({
+        success: false,
+        message: "No active configuration found"
+      });
+    }
+
+    const validationError =
+      validateAnswers(config, answers);
+
+    if (validationError) {
+      return res.status(400).json({
+        success: false,
+        message: validationError
+      });
+    }
+
+    const estimate =
+      calculateEstimate(config, answers);
+
+    const lead = await Lead.create({
+      name,
+      phone,
+      email,
+      answers,
+      config_version: config.config_version,
+      estimate_low: estimate.estimate_low,
+      estimate_high: estimate.estimate_high
+    });
+
+    return res.status(201).json({
+      success: true,
+
+      lead_id: lead._id,
+
+      config_version: config.config_version,
+
+      estimate: {
+        low: estimate.estimate_low,
+        high: estimate.estimate_high
+      }
+    });
+  } catch (error) {
+    console.error(error);
+
+    return res.status(500).json({
+      success: false,
+      message: "Failed to calculate estimate"
+    });
+  }
+}
